@@ -1977,7 +1977,7 @@ class FanSpeedTrait(_Trait):
     name = TRAIT_FAN_SPEED
     commands = [COMMAND_SET_FAN_SPEED, COMMAND_REVERSE]
 
-    def __init__(self, hass, state, config):
+    def __init__(self, hass: HomeAssistant, state, config) -> None:
         """Initialize a trait for a state."""
         super().__init__(hass, state, config)
         if state.domain == FAN_DOMAIN:
