@@ -161,7 +161,7 @@ def _resolve_referenced_devices(
 ) -> None:
     """Resolve targeted device ids into referenced device ids."""
     for device_id in device_ids:
-        if device_id in dev_reg.devices:
+        if device_id in dev_reg._devices:  # noqa: SLF001
             selected.referenced_devices.add(device_id)
             selected.referenced_devices.update(
                 child_device.id

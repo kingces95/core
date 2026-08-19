@@ -1168,7 +1168,7 @@ def _validate_item(
     if device_id and device_id is not UNDEFINED:
         device_registry = dr.async_get(hass)
         if (
-            device_id not in device_registry.devices
+            device_id not in device_registry._devices  # noqa: SLF001
             and device_id not in device_registry.child_devices
         ):
             raise ValueError(f"Device {device_id} does not exist")
@@ -2181,7 +2181,7 @@ class EntityRegistry(BaseRegistry):
             # and are never composites, so an entity on one keeps its device id.
             if (
                 device_id is None
-                or device_id in device_registry.devices
+                or device_id in device_registry._devices  # noqa: SLF001
                 or device_id in device_registry.child_devices
             ):
                 return device_id

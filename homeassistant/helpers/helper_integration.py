@@ -190,7 +190,7 @@ def async_remove_helper_devices(
     # synthesized composite) or a concrete device - a main device or a child device. A main
     # device's splits, if any, share this id as their composite_device_id.
     source_is_concrete = (
-        source_device_id in device_registry.devices
+        source_device_id in device_registry._devices  # noqa: SLF001
         or source_device_id in device_registry.child_devices
     )
     composite_device_id = (
