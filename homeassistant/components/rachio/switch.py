@@ -1,6 +1,7 @@
 """Integration with the Rachio Iro sprinkler system controller."""
 
 from abc import abstractmethod
+from contextlib import suppress
 from datetime import timedelta
 import logging
 from typing import Any, override
@@ -11,7 +12,7 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.entity import Entity, EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.util.dt import as_timestamp, now, parse_datetime, utc_from_timestamp
@@ -32,6 +33,7 @@ from .const import (
     KEY_ON,
     KEY_RAIN_DELAY,
     KEY_RAIN_DELAY_END,
+    KEY_SCHEDULE_ID,
     KEY_SUBTYPE,
     KEY_SUMMARY,
     KEY_TYPE,
@@ -55,6 +57,9 @@ from .entity import RachioDevice, RachioHoseTimerEntity
 from .webhooks import (
     SUBTYPE_RAIN_DELAY_OFF,
     SUBTYPE_RAIN_DELAY_ON,
+    SUBTYPE_SCHEDULE_COMPLETED,
+    SUBTYPE_SCHEDULE_STARTED,
+    SUBTYPE_SCHEDULE_STOPPED,
     SUBTYPE_SLEEP_MODE_OFF,
     SUBTYPE_SLEEP_MODE_ON,
     SUBTYPE_ZONE_COMPLETED,
@@ -69,6 +74,7 @@ ATTR_DURATION = "duration"
 ATTR_PERCENT = "percent"
 ATTR_SCHEDULE_SUMMARY = "Summary"
 ATTR_SCHEDULE_ENABLED = "Enabled"
+ATTR_SCHEDULE_CONTROL = "Schedule control"
 ATTR_SCHEDULE_DURATION = "Duration"
 ATTR_SCHEDULE_TYPE = "Type"
 ATTR_WATERING_DURATION = "Watering Duration seconds"
@@ -128,7 +134,11 @@ def _create_entities(
             RachioZone(person, controller, zone, current_schedule) for zone in zones
         )
         entities.extend(
-            RachioSchedule(controller, schedule)
+            RachioSchedule(controller, schedule, current_schedule)
+            for schedule in schedules + flex_schedules
+        )
+        entities.extend(
+            RachioScheduleEnabled(controller, schedule)
             for schedule in schedules + flex_schedules
         )
     entities.extend(
@@ -297,7 +307,7 @@ class RachioRainDelay(RachioSwitch):
 class RachioZone(RachioSwitch):
     """Representation of one zone of sprinklers connected to the Rachio Iro."""
 
-    _attr_icon = "mdi:water"
+    _attr_icon = "mdi:sprinkler-variant"
 
     def __init__(self, person, controller, data, current_schedule) -> None:
         """Initialize a new Rachio Zone."""
@@ -424,17 +434,18 @@ class RachioZone(RachioSwitch):
 
 
 class RachioSchedule(RachioSwitch):
-    """Representation of one fixed schedule on the Rachio Iro."""
+    """Represent the current activity of one Rachio schedule."""
 
-    _attr_should_poll = True
+    _attr_icon = "mdi:hours-24"
 
-    def __init__(self, controller, data) -> None:
+    def __init__(self, controller, data, current_schedule) -> None:
         """Initialize a new Rachio Schedule."""
         self._schedule_id = data[KEY_ID]
         self._duration = data[KEY_DURATION]
         self._schedule_enabled = data[KEY_ENABLED]
         self._summary = data[KEY_SUMMARY]
         self.type = data.get(KEY_TYPE, SCHEDULE_TYPE_FIXED)
+        self._current_schedule = current_schedule
         self._attr_unique_id = (
             f"{controller.controller_id}-schedule-{self._schedule_id}"
         )
@@ -443,17 +454,10 @@ class RachioSchedule(RachioSwitch):
 
     @property
     @override
-    def icon(self) -> str:
-        """Return the icon to display."""
-        return "mdi:water" if self.schedule_is_enabled else "mdi:water-off"
-
-    @property
-    @override
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the optional state attributes."""
         return {
             ATTR_SCHEDULE_SUMMARY: self._summary,
-            ATTR_SCHEDULE_ENABLED: self.schedule_is_enabled,
             ATTR_SCHEDULE_DURATION: f"{round(self._duration / 60)} minutes",
             ATTR_SCHEDULE_TYPE: self.type,
         }
@@ -462,6 +466,91 @@ class RachioSchedule(RachioSwitch):
     def schedule_is_enabled(self) -> bool:
         """Return whether the schedule is allowed to run."""
         return self._schedule_enabled
+
+    @override
+    def turn_on(self, **kwargs: Any) -> None:
+        """Start this schedule immediately."""
+        self._controller.rachio.schedulerule.start(self._schedule_id)
+        _LOGGER.debug(
+            "Schedule %s started on %s",
+            self.name,
+            self._controller.name,
+        )
+
+    @override
+    def turn_off(self, **kwargs: Any) -> None:
+        """Stop watering all zones."""
+        self._controller.stop_watering()
+
+    @callback
+    @override
+    def _async_handle_update(self, *args, **kwargs) -> None:
+        """Handle incoming webhook schedule data."""
+        # Schedule ID is omitted when an individual zone is running.
+        with suppress(KeyError):
+            if args[0][KEY_SCHEDULE_ID] == self._schedule_id:
+                if args[0][KEY_SUBTYPE] == SUBTYPE_SCHEDULE_STARTED:
+                    self._attr_is_on = True
+                elif args[0][KEY_SUBTYPE] in (
+                    SUBTYPE_SCHEDULE_STOPPED,
+                    SUBTYPE_SCHEDULE_COMPLETED,
+                ):
+                    self._attr_is_on = False
+
+        self.async_write_ha_state()
+
+    @override
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to updates."""
+        self._attr_is_on = self._schedule_id == self._current_schedule.get(
+            KEY_SCHEDULE_ID
+        )
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, SIGNAL_RACHIO_SCHEDULE_UPDATE, self._async_handle_update
+            )
+        )
+
+
+class RachioScheduleEnabled(RachioSwitch):
+    """Represent whether a recurring Rachio schedule is enabled."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_should_poll = True
+
+    def __init__(self, controller, data) -> None:
+        """Initialize a recurring-schedule control."""
+        self._schedule_id = data[KEY_ID]
+        self._duration = data[KEY_DURATION]
+        self._schedule_enabled = data[KEY_ENABLED]
+        self._summary = data[KEY_SUMMARY]
+        self.type = data.get(KEY_TYPE, SCHEDULE_TYPE_FIXED)
+        self._attr_unique_id = (
+            f"{controller.controller_id}-schedule-{self._schedule_id}-enabled"
+        )
+        # Deliberately match the activity entity's display name. This configuration
+        # entity is selected by the dedicated Irrigation dashboard.
+        self._attr_name = f"{data[KEY_NAME]} Schedule"
+        super().__init__(controller)
+
+    @property
+    @override
+    def icon(self) -> str:
+        """Return the icon to display."""
+        return "mdi:water" if self._schedule_enabled else "mdi:water-off"
+
+    @property
+    @override
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return attributes used by the Irrigation dashboard."""
+        return {
+            ATTR_SCHEDULE_SUMMARY: self._summary,
+            ATTR_SCHEDULE_ENABLED: self._schedule_enabled,
+            ATTR_SCHEDULE_CONTROL: True,
+            ATTR_SCHEDULE_DURATION: f"{round(self._duration / 60)} minutes",
+            ATTR_SCHEDULE_TYPE: self.type,
+        }
 
     @override
     def turn_on(self, **kwargs: Any) -> None:
@@ -475,11 +564,6 @@ class RachioSchedule(RachioSwitch):
     def start_watering(self, **kwargs: Any) -> None:
         """Start this schedule immediately."""
         self._controller.rachio.schedulerule.start(self._schedule_id)
-        _LOGGER.debug(
-            "Schedule %s started on %s",
-            self.name,
-            self._controller.name,
-        )
 
     @override
     def turn_off(self, **kwargs: Any) -> None:
@@ -498,14 +582,13 @@ class RachioSchedule(RachioSwitch):
     @callback
     @override
     def _async_handle_update(self, *args, **kwargs) -> None:
-        """Handle a running-schedule webhook without changing enablement."""
+        """Ignore activity webhooks; they do not change enablement."""
         self.async_write_ha_state()
 
     @override
     async def async_added_to_hass(self) -> None:
-        """Subscribe to updates."""
+        """Subscribe to schedule updates."""
         self._attr_is_on = self._schedule_enabled
-
         self.async_on_remove(
             async_dispatcher_connect(
                 self.hass, SIGNAL_RACHIO_SCHEDULE_UPDATE, self._async_handle_update

@@ -20,6 +20,7 @@ ZONE_ID = "zone-id"
 ZONE_ENTITY_ID = "switch.test_controller_test_zone"
 SCHEDULE_ID = "schedule-id"
 SCHEDULE_ENTITY_ID = "switch.test_controller_morning_schedule"
+SCHEDULE_ENABLE_ENTITY_ID = "switch.test_controller_morning_schedule_2"
 
 MOCK_CONTROLLER = {
     "id": CONTROLLER_ID,
@@ -137,17 +138,21 @@ async def test_schedule_switch_controls_recurring_enablement(
     mock_rachio: MagicMock,
 ) -> None:
     """Test schedule switches represent recurring enablement."""
-    assert hass.states.is_state(SCHEDULE_ENTITY_ID, STATE_ON)
+    assert hass.states.is_state(SCHEDULE_ENTITY_ID, STATE_OFF)
+    assert (
+        hass.states.get(SCHEDULE_ENTITY_ID).attributes["icon"] == "mdi:hours-24"
+    )
+    assert hass.states.is_state(SCHEDULE_ENABLE_ENTITY_ID, STATE_ON)
 
     await hass.services.async_call(
         SWITCH_DOMAIN,
         SERVICE_TURN_OFF,
-        {ATTR_ENTITY_ID: SCHEDULE_ENTITY_ID},
+        {ATTR_ENTITY_ID: SCHEDULE_ENABLE_ENTITY_ID},
         blocking=True,
     )
     await hass.async_block_till_done()
 
-    assert hass.states.is_state(SCHEDULE_ENTITY_ID, STATE_OFF)
+    assert hass.states.is_state(SCHEDULE_ENABLE_ENTITY_ID, STATE_OFF)
     assert mock_rachio.valve_put_request.call_args.args[0] == (
         "schedule/updateSchedule"
     )
@@ -156,12 +161,12 @@ async def test_schedule_switch_controls_recurring_enablement(
     await hass.services.async_call(
         SWITCH_DOMAIN,
         SERVICE_TURN_ON,
-        {ATTR_ENTITY_ID: SCHEDULE_ENTITY_ID},
+        {ATTR_ENTITY_ID: SCHEDULE_ENABLE_ENTITY_ID},
         blocking=True,
     )
     await hass.async_block_till_done()
 
-    assert hass.states.is_state(SCHEDULE_ENTITY_ID, STATE_ON)
+    assert hass.states.is_state(SCHEDULE_ENABLE_ENTITY_ID, STATE_ON)
     assert mock_rachio.valve_put_request.call_args.args[1]["enabled"] is True
 
 
