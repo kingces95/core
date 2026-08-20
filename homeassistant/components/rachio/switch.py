@@ -436,7 +436,7 @@ class RachioZone(RachioSwitch):
 class RachioSchedule(RachioSwitch):
     """Represent the current activity of one Rachio schedule."""
 
-    _attr_icon = "mdi:hours-24"
+    _attr_icon = "mdi:camera-timer"
 
     def __init__(self, controller, data, current_schedule) -> None:
         """Initialize a new Rachio Schedule."""

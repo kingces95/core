@@ -140,7 +140,7 @@ async def test_schedule_switch_controls_recurring_enablement(
     """Test schedule switches represent recurring enablement."""
     assert hass.states.is_state(SCHEDULE_ENTITY_ID, STATE_OFF)
     assert (
-        hass.states.get(SCHEDULE_ENTITY_ID).attributes["icon"] == "mdi:hours-24"
+        hass.states.get(SCHEDULE_ENTITY_ID).attributes["icon"] == "mdi:camera-timer"
     )
     assert hass.states.is_state(SCHEDULE_ENABLE_ENTITY_ID, STATE_ON)
 
