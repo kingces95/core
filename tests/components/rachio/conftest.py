@@ -74,6 +74,24 @@ def mock_rachio(request: pytest.FixtureRequest) -> Generator[MagicMock]:
             {"status": 200},
             {"valves": []},
         )
+        private_schedules = [
+            {
+                "id": schedule["id"],
+                "name": schedule["name"],
+                "scheduleCriteria": {},
+                "scheduleRestrictionCriteria": {},
+                "zoneInfo": [],
+                "enabled": schedule["enabled"],
+            }
+            for controller in getattr(request, "param", [])
+            for schedule in controller["scheduleRules"]
+            + controller["flexScheduleRules"]
+        ]
+        rachio.valve_post_request.return_value = (
+            {"status": 200},
+            {"schedule": private_schedules},
+        )
+        rachio.valve_put_request.return_value = ({"status": 200}, {})
         rachio.summary.get_valve_day_views.return_value = (
             {"status": 200},
             {"valveDayViews": []},

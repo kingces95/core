@@ -1,7 +1,6 @@
 """Integration with the Rachio Iro sprinkler system controller."""
 
 from abc import abstractmethod
-from contextlib import suppress
 from datetime import timedelta
 import logging
 from typing import Any, override
@@ -33,7 +32,6 @@ from .const import (
     KEY_ON,
     KEY_RAIN_DELAY,
     KEY_RAIN_DELAY_END,
-    KEY_SCHEDULE_ID,
     KEY_SUBTYPE,
     KEY_SUMMARY,
     KEY_TYPE,
@@ -57,9 +55,6 @@ from .entity import RachioDevice, RachioHoseTimerEntity
 from .webhooks import (
     SUBTYPE_RAIN_DELAY_OFF,
     SUBTYPE_RAIN_DELAY_ON,
-    SUBTYPE_SCHEDULE_COMPLETED,
-    SUBTYPE_SCHEDULE_STARTED,
-    SUBTYPE_SCHEDULE_STOPPED,
     SUBTYPE_SLEEP_MODE_OFF,
     SUBTYPE_SLEEP_MODE_ON,
     SUBTYPE_ZONE_COMPLETED,
@@ -104,9 +99,8 @@ async def async_setup_entry(
         {
             vol.Optional(ATTR_DURATION): cv.positive_int,
         },
-        "turn_on",
+        "start_watering",
     )
-
     if has_flex_sched:
         platform = entity_platform.async_get_current_platform()
         platform.async_register_entity_service(
@@ -134,7 +128,7 @@ def _create_entities(
             RachioZone(person, controller, zone, current_schedule) for zone in zones
         )
         entities.extend(
-            RachioSchedule(person, controller, schedule, current_schedule)
+            RachioSchedule(controller, schedule)
             for schedule in schedules + flex_schedules
         )
     entities.extend(
@@ -161,6 +155,10 @@ class RachioSwitch(RachioDevice, SwitchEntity):
     @abstractmethod
     def _async_handle_update(self, *args, **kwargs) -> None:
         """Handle incoming webhook data."""
+
+    def start_watering(self, **kwargs: Any) -> None:
+        """Run the entity using its existing turn-on behavior."""
+        self.turn_on(**kwargs)
 
 
 class RachioStandbySwitch(RachioSwitch):
@@ -428,14 +426,15 @@ class RachioZone(RachioSwitch):
 class RachioSchedule(RachioSwitch):
     """Representation of one fixed schedule on the Rachio Iro."""
 
-    def __init__(self, person, controller, data, current_schedule) -> None:
+    _attr_should_poll = True
+
+    def __init__(self, controller, data) -> None:
         """Initialize a new Rachio Schedule."""
         self._schedule_id = data[KEY_ID]
         self._duration = data[KEY_DURATION]
         self._schedule_enabled = data[KEY_ENABLED]
         self._summary = data[KEY_SUMMARY]
         self.type = data.get(KEY_TYPE, SCHEDULE_TYPE_FIXED)
-        self._current_schedule = current_schedule
         self._attr_unique_id = (
             f"{controller.controller_id}-schedule-{self._schedule_id}"
         )
@@ -466,7 +465,15 @@ class RachioSchedule(RachioSwitch):
 
     @override
     def turn_on(self, **kwargs: Any) -> None:
-        """Start this schedule."""
+        """Enable this recurring schedule."""
+        self._controller.set_schedule_enabled(self._schedule_id, True)
+        self._schedule_enabled = True
+        self._attr_is_on = True
+        self.schedule_update_ha_state()
+
+    @override
+    def start_watering(self, **kwargs: Any) -> None:
+        """Start this schedule immediately."""
         self._controller.rachio.schedulerule.start(self._schedule_id)
         _LOGGER.debug(
             "Schedule %s started on %s",
@@ -476,32 +483,28 @@ class RachioSchedule(RachioSwitch):
 
     @override
     def turn_off(self, **kwargs: Any) -> None:
-        """Stop watering all zones."""
-        self._controller.stop_watering()
+        """Disable this recurring schedule."""
+        self._controller.set_schedule_enabled(self._schedule_id, False)
+        self._schedule_enabled = False
+        self._attr_is_on = False
+        self.schedule_update_ha_state()
+
+    @override
+    def update(self) -> None:
+        """Refresh whether this recurring schedule is enabled."""
+        self._schedule_enabled = self._controller.schedule_enabled(self._schedule_id)
+        self._attr_is_on = self._schedule_enabled
 
     @callback
     @override
     def _async_handle_update(self, *args, **kwargs) -> None:
-        """Handle incoming webhook schedule data."""
-        # Schedule ID not passed when running individual zones, so we catch that error
-        with suppress(KeyError):
-            if args[0][KEY_SCHEDULE_ID] == self._schedule_id:
-                if args[0][KEY_SUBTYPE] == SUBTYPE_SCHEDULE_STARTED:
-                    self._attr_is_on = True
-                elif args[0][KEY_SUBTYPE] in [
-                    SUBTYPE_SCHEDULE_STOPPED,
-                    SUBTYPE_SCHEDULE_COMPLETED,
-                ]:
-                    self._attr_is_on = False
-
+        """Handle a running-schedule webhook without changing enablement."""
         self.async_write_ha_state()
 
     @override
     async def async_added_to_hass(self) -> None:
         """Subscribe to updates."""
-        self._attr_is_on = self._schedule_id == self._current_schedule.get(
-            KEY_SCHEDULE_ID
-        )
+        self._attr_is_on = self._schedule_enabled
 
         self.async_on_remove(
             async_dispatcher_connect(

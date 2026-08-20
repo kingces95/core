@@ -18,6 +18,8 @@ from homeassistant.core import HomeAssistant
 CONTROLLER_ID = "controller-id"
 ZONE_ID = "zone-id"
 ZONE_ENTITY_ID = "switch.test_controller_test_zone"
+SCHEDULE_ID = "schedule-id"
+SCHEDULE_ENTITY_ID = "switch.test_controller_morning_schedule"
 
 MOCK_CONTROLLER = {
     "id": CONTROLLER_ID,
@@ -33,7 +35,15 @@ MOCK_CONTROLLER = {
             "enabled": True,
         }
     ],
-    "scheduleRules": [],
+    "scheduleRules": [
+        {
+            "id": SCHEDULE_ID,
+            "name": "Morning",
+            "totalDuration": 1200,
+            "enabled": True,
+            "summary": "Every day at 6:00 AM",
+        }
+    ],
     "flexScheduleRules": [],
 }
 
@@ -120,3 +130,52 @@ async def test_zone_stop_failure_does_not_update_state(
     await hass.async_block_till_done()
 
     assert hass.states.is_state(ZONE_ENTITY_ID, STATE_ON)
+
+
+async def test_schedule_switch_controls_recurring_enablement(
+    hass: HomeAssistant,
+    mock_rachio: MagicMock,
+) -> None:
+    """Test schedule switches represent recurring enablement."""
+    assert hass.states.is_state(SCHEDULE_ENTITY_ID, STATE_ON)
+
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_OFF,
+        {ATTR_ENTITY_ID: SCHEDULE_ENTITY_ID},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.is_state(SCHEDULE_ENTITY_ID, STATE_OFF)
+    assert mock_rachio.valve_put_request.call_args.args[0] == (
+        "schedule/updateSchedule"
+    )
+    assert mock_rachio.valve_put_request.call_args.args[1]["enabled"] is False
+
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_ON,
+        {ATTR_ENTITY_ID: SCHEDULE_ENTITY_ID},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.is_state(SCHEDULE_ENTITY_ID, STATE_ON)
+    assert mock_rachio.valve_put_request.call_args.args[1]["enabled"] is True
+
+
+async def test_start_watering_still_runs_schedule(
+    hass: HomeAssistant,
+    mock_rachio: MagicMock,
+) -> None:
+    """Test the start watering action still runs a schedule immediately."""
+    await hass.services.async_call(
+        "rachio",
+        "start_watering",
+        {ATTR_ENTITY_ID: SCHEDULE_ENTITY_ID},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    mock_rachio.schedulerule.start.assert_called_once_with(SCHEDULE_ID)

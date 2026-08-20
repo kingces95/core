@@ -2,6 +2,8 @@
 
 from http import HTTPStatus
 import logging
+from threading import Lock
+from time import monotonic
 from typing import Any, override
 
 from rachiopy import Rachio
@@ -9,7 +11,11 @@ from rachiopy import Rachio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    ConfigEntryNotReady,
+    HomeAssistantError,
+)
 
 from .const import (
     KEY_BASE_STATIONS,
@@ -34,6 +40,7 @@ from .coordinator import RachioScheduleUpdateCoordinator, RachioUpdateCoordinato
 _LOGGER = logging.getLogger(__name__)
 
 PERMISSION_ERROR = "7"
+PRIVATE_SCHEDULE_CACHE_SECONDS = 300
 
 type RachioConfigEntry = ConfigEntry[RachioPerson]
 
@@ -165,6 +172,9 @@ class RachioIro:
         self._flex_schedules = data[KEY_FLEX_SCHEDULES]
         self._init_data = data
         self._webhooks: list[dict[str, Any]] = webhooks
+        self._private_schedules: dict[str, dict[str, Any]] = {}
+        self._private_schedules_updated_at = 0.0
+        self._private_schedules_lock = Lock()
         _LOGGER.debug('%s has ID "%s"', self, self.controller_id)
 
     def setup(self) -> None:
@@ -257,6 +267,69 @@ class RachioIro:
     def list_flex_schedules(self) -> list:
         """Return a list of flex schedules."""
         return self._flex_schedules
+
+    def _refresh_private_schedules_locked(self) -> None:
+        """Refresh schedules from the API used by the Rachio web app."""
+        response = self.rachio.valve_post_request(
+            "schedule/getSchedules",
+            {"device_id": {"id": [self.controller_id]}},
+        )
+        if int(response[0][KEY_STATUS]) != HTTPStatus.OK:
+            raise HomeAssistantError(
+                f"Unable to retrieve schedules for {self.name}: HTTP "
+                f"{response[0][KEY_STATUS]}"
+            )
+
+        self._private_schedules = {
+            schedule[KEY_ID]: schedule for schedule in response[1]["schedule"]
+        }
+        self._private_schedules_updated_at = monotonic()
+
+    def _private_schedule_locked(self, schedule_id: str) -> dict[str, Any]:
+        """Return one private schedule while holding the schedule lock."""
+        cache_expired = (
+            monotonic() - self._private_schedules_updated_at
+            >= PRIVATE_SCHEDULE_CACHE_SECONDS
+        )
+        if cache_expired or schedule_id not in self._private_schedules:
+            self._refresh_private_schedules_locked()
+
+        if schedule := self._private_schedules.get(schedule_id):
+            return schedule
+
+        raise HomeAssistantError(
+            f"Schedule {schedule_id} was not returned for {self.name}"
+        )
+
+    def schedule_enabled(self, schedule_id: str) -> bool:
+        """Return whether a recurring schedule is enabled."""
+        with self._private_schedules_lock:
+            return bool(self._private_schedule_locked(schedule_id)[KEY_ENABLED])
+
+    def set_schedule_enabled(self, schedule_id: str, enabled: bool) -> None:
+        """Enable or disable a recurring schedule using the Rachio web API."""
+        with self._private_schedules_lock:
+            schedule = self._private_schedule_locked(schedule_id)
+            response = self.rachio.valve_put_request(
+                "schedule/updateSchedule",
+                {
+                    "schedule_id": schedule[KEY_ID],
+                    "name": schedule[KEY_NAME],
+                    "schedule_criteria": schedule["scheduleCriteria"],
+                    "schedule_restriction_criteria": schedule[
+                        "scheduleRestrictionCriteria"
+                    ],
+                    "zone_info_to_add_or_update": schedule["zoneInfo"],
+                    KEY_ENABLED: enabled,
+                },
+            )
+            if int(response[0][KEY_STATUS]) != HTTPStatus.OK:
+                raise HomeAssistantError(
+                    f"Unable to update schedule on {self.name}: HTTP "
+                    f"{response[0][KEY_STATUS]}"
+                )
+
+            schedule[KEY_ENABLED] = enabled
 
     def stop_watering(self) -> None:
         """Stop watering all zones connected to this controller."""
