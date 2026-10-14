@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from http import HTTPStatus
 import logging
 from typing import Any, override
+from urllib.parse import urlparse
 
 import probatio
 from rachiopy import Rachio
@@ -18,6 +19,12 @@ from homeassistant.config_entries import (
 from homeassistant.const import CONF_API_KEY
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.selector import (
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 from homeassistant.helpers.service_info.zeroconf import (
     ATTR_PROPERTIES_ID,
     ZeroconfServiceInfo,
@@ -25,6 +32,7 @@ from homeassistant.helpers.service_info.zeroconf import (
 
 from .const import (
     CONF_MANUAL_RUN_MINS,
+    CONF_WEBHOOK_URL_BASE,
     DEFAULT_MANUAL_RUN_MINS,
     DOMAIN,
     KEY_ID,
@@ -171,11 +179,32 @@ class OptionsFlowHandler(OptionsFlow):
     """Handle a option flow for Rachio."""
 
     async def async_step_init(
-        self, user_input: dict[str, int] | None = None
+        self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle options flow."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            if webhook_url_base := user_input.get(CONF_WEBHOOK_URL_BASE):
+                try:
+                    webhook_url_base = cv.url(webhook_url_base).rstrip("/")
+                except probatio.Invalid:
+                    errors[CONF_WEBHOOK_URL_BASE] = "invalid_url"
+                else:
+                    parsed_url = urlparse(webhook_url_base)
+                    if (
+                        parsed_url.username
+                        or parsed_url.password
+                        or parsed_url.query
+                        or parsed_url.fragment
+                    ):
+                        errors[CONF_WEBHOOK_URL_BASE] = "invalid_url"
+                    else:
+                        user_input[CONF_WEBHOOK_URL_BASE] = webhook_url_base
+            else:
+                user_input.pop(CONF_WEBHOOK_URL_BASE, None)
+
+            if not errors:
+                return self.async_create_entry(title="", data=user_input)
 
         data_schema = probatio.Schema(
             {
@@ -184,10 +213,20 @@ class OptionsFlowHandler(OptionsFlow):
                     default=self.config_entry.options.get(
                         CONF_MANUAL_RUN_MINS, DEFAULT_MANUAL_RUN_MINS
                     ),
-                ): int
+                ): int,
+                probatio.Optional(
+                    CONF_WEBHOOK_URL_BASE,
+                    description={
+                        "suggested_value": self.config_entry.options.get(
+                            CONF_WEBHOOK_URL_BASE
+                        )
+                    },
+                ): TextSelector(TextSelectorConfig(type=TextSelectorType.URL)),
             }
         )
-        return self.async_show_form(step_id="init", data_schema=data_schema)
+        return self.async_show_form(
+            step_id="init", data_schema=data_schema, errors=errors
+        )
 
 
 class CannotConnect(HomeAssistantError):

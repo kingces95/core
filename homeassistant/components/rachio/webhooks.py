@@ -9,6 +9,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
     CONF_CLOUDHOOK_URL,
+    CONF_WEBHOOK_URL_BASE,
     DOMAIN,
     KEY_EXTERNAL_ID,
     KEY_TYPE,
@@ -131,7 +132,9 @@ async def async_get_or_create_registered_webhook_id_and_url(
         config[CONF_WEBHOOK_ID] = webhook_id
         updated_config = True
 
-    if cloud.async_active_subscription(hass):
+    if webhook_url_base := entry.options.get(CONF_WEBHOOK_URL_BASE):
+        webhook_url = f"{webhook_url_base.rstrip('/')}/{webhook_id}"
+    elif cloud.async_active_subscription(hass):
         if not (cloudhook_url := config.get(CONF_CLOUDHOOK_URL)):
             cloudhook_url = await cloud.async_create_cloudhook(hass, webhook_id)
             config[CONF_CLOUDHOOK_URL] = cloudhook_url

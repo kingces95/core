@@ -10,6 +10,7 @@ from homeassistant import config_entries
 from homeassistant.components.rachio.const import (
     CONF_CUSTOM_URL,
     CONF_MANUAL_RUN_MINS,
+    CONF_WEBHOOK_URL_BASE,
     DOMAIN,
 )
 from homeassistant.const import CONF_API_KEY, CONF_WEBHOOK_ID
@@ -245,8 +246,62 @@ async def test_options_flow(hass: HomeAssistant) -> None:
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
 
-    # This should be improved at a later stage to increase test coverage
-    hass.config_entries.options.async_abort(result["flow_id"])
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_MANUAL_RUN_MINS: 5,
+            CONF_WEBHOOK_URL_BASE: "https://example.com/home/rachio/",
+        },
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == {
+        CONF_MANUAL_RUN_MINS: 5,
+        CONF_WEBHOOK_URL_BASE: "https://example.com/home/rachio",
+    }
+
+
+@pytest.mark.parametrize(
+    "webhook_url_base",
+    [
+        "not-a-url",
+        "https://user:password@example.com/home/rachio",
+        "https://example.com/home/rachio?query=value",
+        "https://example.com/home/rachio#fragment",
+    ],
+)
+async def test_options_flow_rejects_invalid_webhook_url_base(
+    hass: HomeAssistant, webhook_url_base: str
+) -> None:
+    """Test invalid webhook public base URLs are rejected."""
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_API_KEY: "api_key"})
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_MANUAL_RUN_MINS: 10,
+            CONF_WEBHOOK_URL_BASE: webhook_url_base,
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_WEBHOOK_URL_BASE: "invalid_url"}
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_MANUAL_RUN_MINS: 10,
+            CONF_WEBHOOK_URL_BASE: "https://example.com/home/rachio",
+        },
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == {
+        CONF_MANUAL_RUN_MINS: 10,
+        CONF_WEBHOOK_URL_BASE: "https://example.com/home/rachio",
+    }
 
 
 async def test_reauth(hass: HomeAssistant) -> None:

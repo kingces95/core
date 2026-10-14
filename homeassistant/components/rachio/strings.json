@@ -60,10 +60,17 @@
     }
   },
   "options": {
+    "error": {
+      "invalid_url": "Invalid URL"
+    },
     "step": {
       "init": {
         "data": {
-          "manual_run_mins": "Duration in minutes to run when activating a zone switch"
+          "manual_run_mins": "Duration in minutes to run when activating a zone switch",
+          "webhook_url_base": "Webhook public base URL"
+        },
+        "data_description": {
+          "webhook_url_base": "For reverse proxies with path-based routing. Home Assistant appends the webhook ID. Leave blank to use the normal Home Assistant or Home Assistant Cloud URL."
         }
       }
     }

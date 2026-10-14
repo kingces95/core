@@ -7,6 +7,7 @@ DOMAIN = "rachio"
 CONF_CUSTOM_URL = "hass_url_override"
 # Manual run length
 CONF_MANUAL_RUN_MINS = "manual_run_mins"
+CONF_WEBHOOK_URL_BASE = "webhook_url_base"
 DEFAULT_MANUAL_RUN_MINS = 10
 
 # Slope constants

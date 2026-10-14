@@ -33,6 +33,11 @@ PLATFORMS = [Platform.BINARY_SENSOR, Platform.CALENDAR, Platform.SWITCH]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
+async def async_reload_entry(hass: HomeAssistant, entry: RachioConfigEntry) -> None:
+    """Reload Rachio when config entry options change."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Rachio integration."""
     async_setup_services(hass)
@@ -53,6 +58,8 @@ async def async_remove_entry(hass: HomeAssistant, entry: RachioConfigEntry) -> N
 
 async def async_setup_entry(hass: HomeAssistant, entry: RachioConfigEntry) -> None:
     """Set up the Rachio config entry."""
+
+    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     config = entry.data
     options = entry.options

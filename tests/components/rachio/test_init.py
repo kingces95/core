@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+from homeassistant.components.rachio import async_reload_entry
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
 
@@ -55,3 +56,13 @@ async def test_setup_no_devices_found(
 
     assert mock_config_entry.state is ConfigEntryState.SETUP_ERROR
     assert mock_config_entry.reason == "No Rachio devices found in the account"
+
+
+async def test_options_update_reloads_entry(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Test changing Rachio options reloads the config entry."""
+    with patch.object(hass.config_entries, "async_reload") as async_reload:
+        await async_reload_entry(hass, mock_config_entry)
+
+    async_reload.assert_awaited_once_with(mock_config_entry.entry_id)
